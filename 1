@@ -1,0 +1,649 @@
+{
+  "cells": [
+    {
+      "cell_type": "markdown",
+      "metadata": {
+        "id": "view-in-github",
+        "colab_type": "text"
+      },
+      "source": [
+        "<a href=\"https://colab.research.google.com/github/kyou0612/Weeklyreport/blob/main/mahjong_transformer_tenpai_noCLS.ipynb\" target=\"_parent\"><img src=\"https://colab.research.google.com/assets/colab-badge.svg\" alt=\"Open In Colab\"/></a>"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {
+        "id": "f4YUZzlwFPeJ"
+      },
+      "outputs": [],
+      "source": [
+        ""
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {
+        "id": "_74-oaeTte67"
+      },
+      "source": [
+        "# 麻雀テンパイ予測 with Vision Transformer\n",
+        "\n",
+        "**Author:** 俺様<br>\n",
+        "**Date created:** 2021/08/26<br>\n",
+        "**Last modified:** 2022/01/09<br>\n",
+        "**Description:** "
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {
+        "id": "BArYz9SBte6-"
+      },
+      "source": [
+        "## Setup"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "dw6nmtLCfB1Z",
+        "outputId": "e4de0401-d3d0-40e5-d3c0-4a2185eb5b0f"
+      },
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "Mounted at /content/drive\n"
+          ]
+        }
+      ],
+      "source": [
+        "from google.colab import drive\n",
+        "drive.mount('/content/drive')"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {
+        "id": "DRtYnSxEulQv"
+      },
+      "outputs": [],
+      "source": [
+        "pip install -U tensorflow-addons"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {
+        "id": "L3ZWxOE-M7wb"
+      },
+      "outputs": [],
+      "source": [
+        "pip install optuna"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {
+        "id": "t4PJZQh1te6_"
+      },
+      "outputs": [],
+      "source": [
+        "import numpy as np\n",
+        "import tensorflow as tf\n",
+        "from tensorflow import keras\n",
+        "from tensorflow.keras import layers\n",
+        "import tensorflow_addons as tfa\n",
+        "import codecs, copy\n",
+        "import time\n",
+        "import matplotlib.pyplot as plt\n",
+        "from sklearn.metrics import classification_report, roc_curve, auc\n",
+        "import copy\n",
+        "from keras.layers import Lambda\n",
+        "import optuna\n",
+        "\n",
+        "\n",
+        "\n",
+        "input_path = '/content/drive/MyDrive/experiment/learning_data/tfrecord/data_train_2013_MjT_tnsp'\n",
+        "output_path = '/content/drive/MyDrive/experiment/learning_data/tfrecord/data_train_2013_MjT_tnsp_24_36_1_'\n",
+        "output_path2 = '/content/drive/MyDrive/experiment/learning_data/tfrecord/data_test_2015_MjT_tnsp_24_36_1_'\n",
+        "weights_path = '/content/drive/MyDrive/experiment/backup/hitori_T.ckpt.data-00000-of-00001'"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {
+        "id": "9B1DpPSKte7A"
+      },
+      "source": [
+        "## Prepare the data"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {
+        "id": "Q8JJ0FA-PBBE"
+      },
+      "outputs": [],
+      "source": [
+        "num_classes = 1\n",
+        "# input_shape = (25,36,1)#36:lichi 37:目標指定\n",
+        "input_shape = (24,36,1)#36:lichi 37:目標指定\n",
+        "\n",
+        "\n",
+        "\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {
+        "id": "uZWfdcI4te7B"
+      },
+      "source": [
+        "## Configure the hyperparameters"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {
+        "id": "vBwR8jJSte7D"
+      },
+      "outputs": [],
+      "source": [
+        "learning_rate = 0.001\n",
+        "weight_decay = 0.0001\n",
+        "batch_size = 256\n",
+        "\n",
+        "# image_size = 72  # We'll resize input images to this size\n",
+        "# patch_size = 6  # Size of the patches to be extract from the input images\n",
+        "num_patches = 24\n",
+        "projection_dim = 104\n",
+        "num_heads = 5\n",
+        "transformer_layers = 8\n",
+        "transformer_units = [\n",
+        "    projection_dim * 2,\n",
+        "    projection_dim,\n",
+        "]  # Size of the transformer layers\n",
+        "\n",
+        "mlp_head_units = [projection_dim, projection_dim//2]  # Size of the dense layers of the final classifier\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {
+        "id": "SnI6LZUSte7G"
+      },
+      "source": [
+        "## Implement multilayer perceptron (MLP)"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {
+        "id": "KwlJZFkPte7G"
+      },
+      "outputs": [],
+      "source": [
+        "\n",
+        "def mlp(x, hidden_units, dropout_rate):\n",
+        "    for units in hidden_units:\n",
+        "        x = layers.Dense(units, activation=tf.nn.gelu)(x)\n",
+        "        x = layers.Dropout(dropout_rate)(x)\n",
+        "    return x\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {
+        "id": "Y6v9YSPXte7G"
+      },
+      "source": [
+        "## Implement patch creation as a layer"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {
+        "id": "t1utOpgZte7H"
+      },
+      "outputs": [],
+      "source": [
+        "\n",
+        "class Patches(layers.Layer):\n",
+        "    def __init__(self):\n",
+        "        super(Patches, self).__init__()\n",
+        "        \n",
+        "\n",
+        "    def call(self, images):\n",
+        "        batch_size = tf.shape(images)[0]\n",
+        "        patches = tf.image.extract_patches(\n",
+        "            images=images,\n",
+        "            sizes=[1, 1, 36, 1],\n",
+        "            strides=[1, 1, 1, 1],\n",
+        "            rates=[1, 1, 1, 1],\n",
+        "            padding=\"VALID\",\n",
+        "        )\n",
+        "        patch_dims = patches.shape[-1]\n",
+        "        patches = tf.reshape(patches, [batch_size, -1, patch_dims])\n",
+        "        return patches\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {
+        "id": "t4QLPCLrte7I"
+      },
+      "source": [
+        "## Implement the patch encoding layer\n",
+        "\n",
+        "The `PatchEncoder` layer will linearly transform a patch by projecting it into a\n",
+        "vector of size `projection_dim`. In addition, it adds a learnable position\n",
+        "embedding to the projected vector."
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {
+        "id": "JPxfj2RVte7I"
+      },
+      "outputs": [],
+      "source": [
+        "\n",
+        "class PatchEncoder(layers.Layer):\n",
+        "    def __init__(self, num_patches, projection_dim):\n",
+        "        super(PatchEncoder, self).__init__()\n",
+        "        self.num_patches = num_patches\n",
+        "        self.projection = layers.Dense(units=projection_dim)\n",
+        "        self.position_embedding = layers.Embedding(\n",
+        "            input_dim=num_patches, output_dim=projection_dim\n",
+        "        )\n",
+        "\n",
+        "    def call(self, patch):\n",
+        "        positions = tf.range(start=0, limit=self.num_patches, delta=1)\n",
+        "        encoded = self.projection(patch) + self.position_embedding(positions)\n",
+        "        return encoded\n"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {
+        "id": "QBYtmTkFte7I"
+      },
+      "source": [
+        "## Build the ViT model\n",
+        "\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {
+        "id": "7XrMLEX5te7J"
+      },
+      "outputs": [],
+      "source": [
+        "\n",
+        "def create_vit_classifier():\n",
+        "    inputs = layers.Input(shape=input_shape)\n",
+        "    # Augment data.\n",
+        "    # augmented = data_augmentation(inputs)\n",
+        "    # Create patches.\n",
+        "    patches = Patches()(inputs)\n",
+        "    # Encode patches.\n",
+        "    encoded_patches = PatchEncoder(num_patches, projection_dim)(patches)\n",
+        "\n",
+        "    # Create multiple layers of the Transformer block.\n",
+        "    for _ in range(transformer_layers):\n",
+        "        # Layer normalization 1.\n",
+        "        x1 = layers.LayerNormalization(epsilon=1e-6)(encoded_patches)\n",
+        "        # Create a multi-head attention layer.\n",
+        "        attention_output = layers.MultiHeadAttention(\n",
+        "            num_heads=num_heads, key_dim=projection_dim, dropout=0.1\n",
+        "        )(x1, x1)\n",
+        "        # Skip connection 1.\n",
+        "        x2 = layers.Add()([attention_output, encoded_patches])\n",
+        "        # Layer normalization 2.\n",
+        "        x3 = layers.LayerNormalization(epsilon=1e-6)(x2)\n",
+        "        # MLP.\n",
+        "        x3 = mlp(x3, hidden_units=[projection_dim * 2,projection_dim,], dropout_rate=0.1)\n",
+        "        # Skip connection 2.\n",
+        "        encoded_patches = layers.Add()([x3, x2])\n",
+        "\n",
+        "    # Create a [batch_size, projection_dim] tensor.\n",
+        "    # encoded_patches = Lambda(lambda a: a[:,:1], input_shape=[None, 25,16])(encoded_patches)\n",
+        "    representation = layers.LayerNormalization(epsilon=1e-6)(encoded_patches)\n",
+        "    representation = layers.Flatten()(representation)\n",
+        "    representation = layers.Dropout(0.15)(representation)\n",
+        "    # Add MLP.\n",
+        "    features = mlp(representation, hidden_units= [projection_dim*8, projection_dim*4], dropout_rate=0.15)\n",
+        "    # Classify outputs.\n",
+        "    logits = layers.Dense(num_classes,activation='sigmoid')(features)\n",
+        "    # Create the Keras model.\n",
+        "    model = keras.Model(inputs=inputs, outputs=logits)\n",
+        "    return model\n"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "TweGqrbHp1GJ",
+        "outputId": "7246d1c9-7b75-496d-c78e-3fe5d0981390"
+      },
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "Fri Dec 10 04:14:01 2021       \n",
+            "+-----------------------------------------------------------------------------+\n",
+            "| NVIDIA-SMI 495.44       Driver Version: 460.32.03    CUDA Version: 11.2     |\n",
+            "|-------------------------------+----------------------+----------------------+\n",
+            "| GPU  Name        Persistence-M| Bus-Id        Disp.A | Volatile Uncorr. ECC |\n",
+            "| Fan  Temp  Perf  Pwr:Usage/Cap|         Memory-Usage | GPU-Util  Compute M. |\n",
+            "|                               |                      |               MIG M. |\n",
+            "|===============================+======================+======================|\n",
+            "|   0  Tesla P100-PCIE...  Off  | 00000000:00:04.0 Off |                    0 |\n",
+            "| N/A   39C    P0    26W / 250W |      0MiB / 16280MiB |      0%      Default |\n",
+            "|                               |                      |                  N/A |\n",
+            "+-------------------------------+----------------------+----------------------+\n",
+            "                                                                               \n",
+            "+-----------------------------------------------------------------------------+\n",
+            "| Processes:                                                                  |\n",
+            "|  GPU   GI   CI        PID   Type   Process name                  GPU Memory |\n",
+            "|        ID   ID                                                   Usage      |\n",
+            "|=============================================================================|\n",
+            "|  No running processes found                                                 |\n",
+            "+-----------------------------------------------------------------------------+\n"
+          ]
+        }
+      ],
+      "source": [
+        "!nvidia-smi"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {
+        "id": "fwbbd5bqa_23"
+      },
+      "outputs": [],
+      "source": [
+        "def deserialize_example(serialized_string):\n",
+        "    image_feature_description = {\n",
+        "        'x': tf.io.FixedLenFeature([], tf.string),\n",
+        "        'y1': tf.io.FixedLenFeature([], tf.string),\n",
+        "    }\n",
+        "    example = tf.io.parse_single_example(serialized_string, image_feature_description)\n",
+        "    image = tf.reshape(tf.io.decode_raw(example[\"x\"], tf.int32), (24, 36, 1))\n",
+        "    label = tf.io.decode_raw(example[\"y1\"], tf.int32)\n",
+        "    return image, label"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {
+        "id": "POXFGzF8te7J"
+      },
+      "source": [
+        "## Compile, train, and evaluate the mode"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": null,
+      "metadata": {
+        "id": "itRdb257te7J"
+      },
+      "outputs": [],
+      "source": [
+        "\n",
+        "def run_experiment(model):\n",
+        "    \n",
+        "    \n",
+        "    optimizer = tf.optimizers.Adam(\n",
+        "        learning_rate=learning_rate\n",
+        "        # , decay=0.000003\n",
+        "    )\n",
+        "\n",
+        "    model.compile(\n",
+        "        optimizer=optimizer,\n",
+        "        loss='binary_crossentropy',\n",
+        "        metrics=[\n",
+        "            keras.metrics.binary_accuracy\n",
+        "            # keras.metrics.SparseTopKCategoricalAccuracy(5, name=\"top-5-accuracy\"),\n",
+        "        ],\n",
+        "    )\n",
+        "    model.summary()\n",
+        "\n",
+        "\n",
+        "    # checkpoint_filepath = \"/content/drive/MyDrive/experiment/model/checkpoint\"\n",
+        "    # checkpoint_callback = keras.callbacks.ModelCheckpoint(\n",
+        "    #     checkpoint_filepath,\n",
+        "    #     monitor=\"val_accuracy\",\n",
+        "    #     save_best_only=True,\n",
+        "    #     save_weights_only=True,\n",
+        "    # )\n",
+        "    t=0\n",
+        "    max = 0\n",
+        "    epochs = 50\n",
+        "    trainloss_list=[]\n",
+        "    trainacc_list=[]\n",
+        "    valloss_list=[]\n",
+        "    valacc_list=[]\n",
+        "    testloss_list=[]\n",
+        "    testacc_list=[]\n",
+        "    x_predict=[]\n",
+        "    # trainpart = [2,3,4]\n",
+        "    # testpart = 1\n",
+        "\n",
+        "    while t < epochs:\n",
+        "      for i in range(10):\n",
+        "        dataset = tf.data.TFRecordDataset(output_path + str(i+1)+'.tfrecords').map(deserialize_example).batch(100000)\n",
+        "\n",
+        "        for data in dataset:\n",
+        "          # head = np.zeros([len(data[0]),1,36,1])\n",
+        "          # x_head = np.concatenate([head, data[0]],axis=1)\n",
+        "          \n",
+        "  \n",
+        "           \n",
+        "          history = model.fit(\n",
+        "              # x=x_head,\n",
+        "              x=data[0],\n",
+        "              y=data[1],\n",
+        "              epochs=1,\n",
+        "              verbose=2,\n",
+        "              class_weight={0:1 , 1:1.2 },\n",
+        "              # validation_split=0.1\n",
+        "              # callbacks=[checkpoint_callback],\n",
+        "          )\n",
+        "          trainloss_list.append(history.history['loss'])\n",
+        "          trainacc_list.append(history.history['binary_accuracy'])\n",
+        "          # valloss_list.append(history.history['val_loss'])\n",
+        "          # valacc_list.append(history.history['val_binary_accuracy'])\n",
+        "      t += 1\n",
+        "      # model.save_weights(\"/content/drive/MyDrive/experiment/model/checkpoint/hitoriforclasstoken.ckpt\"+str(t))\n",
+        "     \n",
+        "      # testtesttestx=np.empty((0,25,36,1), int)\n",
+        "      testtesttestx=np.empty((0,24,36,1), int)\n",
+        "      testtesttesty=np.empty((0,1), int)\n",
+        "\n",
+        "      playernum=np.empty((0,1), int)\n",
+        "      lichilichi=np.empty((0,1), int)\n",
+        "      sutelenlen=np.empty((0,1), int)\n",
+        "      for i in range(2):\n",
+        "        testdataset = tf.data.TFRecordDataset(output_path2 + str(i+1)+'.tfrecords').map(deserialize_example).batch(100000)\n",
+        "\n",
+        "        for data in testdataset:\n",
+        "            # head = np.zeros([len(data[0]),1,36,1])\n",
+        "            # x_head = np.concatenate([head, data[0]],axis=1)\n",
+        "            # testtesttestx = np.concatenate([testtesttestx, data[0]],axis=0)\n",
+        "\n",
+        "            # testtesttestx = np.append(testtesttestx,x_head,axis=0)\n",
+        "            testtesttestx = np.append(testtesttestx,data[0],axis=0)\n",
+        "            testtesttesty = np.concatenate([testtesttesty, data[1]])\n",
+        " \n",
+        "            \n",
+        "        # score = model.evaluate(testtesttestx, [testtesttesty1,testtesttesty2,testtesttesty3,testtesttesty4])\n",
+        "        # print(score)\n",
+        "      score = model.evaluate(x=testtesttestx,y=testtesttesty,verbose=0)\n",
+        "      print(score)\n",
+        "      testloss_list.append(score[0])\n",
+        "      testacc_list.append(score[1])\n",
+        "      result = model.predict(testtesttestx)\n",
+        "          # fpr, tpr, thresholds = roc_curve(y_test, result)\n",
+        "      result_1 = [int((s+0.5)//1) for s in result]\n",
+        "      report = classification_report(testtesttesty, result_1, digits=4,output_dict=True)\n",
+        "      print(report)\n",
+        "      weightedf1 = report['1']['f1-score']\n",
+        "      print('epoch:'+str(t)+' '+str(weightedf1))\n",
+        "      if weightedf1 > max:\n",
+        "        max = weightedf1\n",
+        "        model.save_weights(\"./checkpoint/hitori_T.ckpt\")\n",
+        "    fig1=plt.figure     \n",
+        "    plt.plot(trainacc_list)\n",
+        "    plt.plot(testacc_list)    \n",
+        "    plt.title('acc')\n",
+        "    plt.xlabel('Epoch')\n",
+        "    plt.legend(['Train', 'Test',], loc='upper left')\n",
+        "    fig1.savefig(\"./acc.png\")\n",
+        "\n",
+        "    fig2=plt.figure\n",
+        "    plt.plot(trainloss_list)\n",
+        "    plt.plot(testloss_list)\n",
+        "    plt.title('loss')\n",
+        "    plt.xlabel('Epoch')\n",
+        "    plt.legend(['Train', 'Test'], loc='upper left')\n",
+        "    fig1.savefig(\"./loss.png\")\n",
+        "\n",
+        "\n",
+        "    # plt.plot(testacc_list)\n",
+        "    # plt.title('testacc')\n",
+        "    # plt.xlabel('Epoch')\n",
+        "    # plt.show()\n",
+        "\n",
+        "    # plt.plot(testloss_list)\n",
+        "    # plt.title('testloss')\n",
+        "    # plt.xlabel('Epoch')\n",
+        "    # plt.show()\n",
+        "\n",
+        "\n",
+        "\n",
+        "    return -max\n",
+        "\n",
+        "def test(model):\n",
+        "    optimizer = tf.optimizers.Adam(\n",
+        "          learning_rate=learning_rate\n",
+        "          # , decay=0.000003\n",
+        "      )\n",
+        "\n",
+        "    model.compile(\n",
+        "        optimizer=optimizer,\n",
+        "        loss='binary_crossentropy',\n",
+        "        metrics=[\n",
+        "            keras.metrics.binary_accuracy\n",
+        "            # keras.metrics.SparseTopKCategoricalAccuracy(5, name=\"top-5-accuracy\"),\n",
+        "        ],\n",
+        "    )\n",
+        "    model.summary()\n",
+        "    model.load_weights(weights_path)\n",
+        "    max = 0\n",
+        "    for i in range(2):\n",
+        "        testdataset = tf.data.TFRecordDataset(output_path2 + str(i+1)+'.tfrecords').map(deserialize_example).batch(100000)\n",
+        "\n",
+        "        for data in testdataset:\n",
+        "            # head = np.zeros([len(data[0]),1,36,1])\n",
+        "            # x_head = np.concatenate([head, data[0]],axis=1)\n",
+        "            # testtesttestx = np.concatenate([testtesttestx, data[0]],axis=0)\n",
+        "\n",
+        "            # testtesttestx = np.append(testtesttestx,x_head,axis=0)\n",
+        "            testtesttestx = np.append(testtesttestx,data[0],axis=0)\n",
+        "            testtesttesty = np.concatenate([testtesttesty, data[1]])\n",
+        " \n",
+        "            \n",
+        "        # score = model.evaluate(testtesttestx, [testtesttesty1,testtesttesty2,testtesttesty3,testtesttesty4])\n",
+        "        # print(score)\n",
+        "    score = model.evaluate(x=testtesttestx,y=testtesttesty,verbose=0)\n",
+        "    print(score)\n",
+        "    result = model.predict(testtesttestx)\n",
+        "        # fpr, tpr, thresholds = roc_curve(y_test, result)\n",
+        "    result_1 = [int((s+0.5)//1) for s in result]\n",
+        "    report = classification_report(testtesttesty, result_1, digits=4,output_dict=True)\n",
+        "    print(report)\n",
+        "    weightedf1 = report['1']['f1-score']\n",
+        "    \n",
+        "    \n",
+        "\n",
+        "\n",
+        "def objective(trial): # 引数 (trial) はTrial型の値\n",
+        "    global num_heads \n",
+        "    global projection_dim     \n",
+        "    global transformer_layers \n",
+        "    x_numhead = trial.suggest_int(\"num_head\", 1, 12)\n",
+        "    x_dim = trial.suggest_int(\"dim\", 16,128, 8)\n",
+        "    x_numlayers = trial.suggest_int(\"num_layers\", 1, 12)\n",
+        "    num_heads = x_numhead\n",
+        "    #num_heads = 1\n",
+        "    projection_dim = x_dim\n",
+        "    transformer_layers = x_numlayers\n",
+        "    #transformer_layers = 1\n",
+        "    # print(num_heads)\n",
+        "    # print(projection_dim)    \n",
+        "    # print(transformer_layers)\n",
+        "    vit_classifier = create_vit_classifier()\n",
+        "    wf1 = run_experiment(vit_classifier)\n",
+        "    \n",
+        "    return wf1\n",
+        "    \n",
+        "def start():\n",
+        "    vit_classifier = create_vit_classifier()\n",
+        "    wf1 = run_experiment(vit_classifier)\n",
+        "    return wf1\n",
+        "#study = optuna.create_study(direction=\"minimize\")\n",
+        "#study.optimize(objective, # 目的関数\n",
+        "#               n_trials=50 # トライアル数\n",
+        "#              )\n",
+        "\n",
+        "stttttt = start()\n"
+      ]
+    }
+  ],
+  "metadata": {
+    "accelerator": "GPU",
+    "colab": {
+      "collapsed_sections": [],
+      "name": "mahjong transformer_tenpai_noCLS.ipynb",
+      "provenance": [],
+      "mount_file_id": "1WttGvogv3KUqmtEmKoHbrvdJ9umQEWXh",
+      "authorship_tag": "ABX9TyNqB6Rdi3gLW2ORr0yh2lR/",
+      "include_colab_link": true
+    },
+    "kernelspec": {
+      "display_name": "Python 3",
+      "name": "python3"
+    },
+    "language_info": {
+      "name": "python"
+    }
+  },
+  "nbformat": 4,
+  "nbformat_minor": 0
+}
